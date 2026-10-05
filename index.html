@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Frog Leap Peg Puzzle Game</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  .frog-cell {
+    width: 56px; height: 56px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 50%;
+    font-size: 1.8rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    border: 3px solid transparent;
+    position: relative;
+  }
+  .frog-cell:focus { outline: 3px solid #fbbf24; outline-offset: 2px; }
+  .frog-cell.selected { border-color: #fbbf24; transform: scale(1.1); }
+  .frog-cell.valid-target { border-color: #34d399; animation: bounce-hint 0.6s ease infinite alternate; }
+  @keyframes bounce-hint { from { transform: scale(1); } to { transform: scale(1.05); } }
+  @keyframes hop {
+    0% { transform: scale(1) translateY(0); }
+    50% { transform: scale(1.3) translateY(-12px); }
+    100% { transform: scale(1) translateY(0); }
+  }
+  .hopping { animation: hop 0.35s ease; }
+  .connector { flex: 1; height: 8px; border-radius: 4px; max-width: 20px; }
+</style>
+</head>
+<body class="bg-emerald-950 min-h-screen text-white font-sans">
+
+<div class="max-w-xl mx-auto p-4">
+  <h1 class="text-3xl font-bold text-center text-green-400 mb-1">🐸 Frog Leap Puzzle</h1>
+  <p class="text-center text-gray-400 mb-4 text-sm">Swap green and brown frogs by jumping over each other</p>
+
+  <!-- Controls -->
+  <div class="flex flex-wrap items-center justify-between gap-3 mb-5">
+    <div class="flex items-center gap-2">
+      <label class="text-sm text-gray-300" for="frog-count">Frogs per side:</label>
+      <select id="frog-count" onchange="initGame()"
+        class="bg-emerald-800 text-white border border-emerald-600 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-green-400">
+        <option value="2">2</option>
+        <option value="3" selected>3</option>
+        <option value="4">4</option>
+        <option value="5">5</option>
+        <option value="6">6</option>
+      </select>
+    </div>
+    <div class="flex items-center gap-3">
+      <span class="text-sm text-gray-300">Moves: <span id="move-count" class="font-bold text-green-400">0</span></span>
+      <span class="text-sm text-gray-300">Best: <span id="best-display" class="font-bold text-yellow-400">--</span></span>
+    </div>
+  </div>
+
+  <div id="status-msg" class="text-center text-sm text-gray-400 mb-4 h-5"></div>
+
+  <!-- Board -->
+  <div class="flex justify-center items-center gap-1 mb-6 flex-wrap" id="board" role="group" aria-label="Frog puzzle board">
+  </div>
+
+  <!-- Buttons -->
+  <div class="flex justify-center gap-3 flex-wrap">
+    <button onclick="undoMove()" class="bg-gray-700 hover:bg-gray-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition">
+      ↩ Undo
+    </button>
+    <button onclick="autoSolve()" class="bg-blue-700 hover:bg-blue-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition">
+      🤖 Auto-Solve
+    </button>
+    <button onclick="initGame()" class="bg-emerald-700 hover:bg-emerald-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition">
+      ↺ Reset
+    </button>
+  </div>
+
+  <div class="mt-6 bg-emerald-900 rounded-xl p-3 text-xs text-gray-400">
+    <p><strong class="text-green-400">Rules:</strong> Green frogs (🐸) move right; Brown frogs (🦎) move left. Frogs can slide one space or jump over one frog of the opposite color into an empty space.</p>
+  </div>
+</div>
+
+<script>
+// State: array of cells: 'G' = green, 'B' = brown, null = empty
+let state = [];
+let n = 3; // frogs per side
+let moves = 0;
+let selected = null; // index of selected frog
+let history = [];
+let solving = false;
+let bestScores = {};
+
+function initGame() {
+  n = parseInt(document.getElementById('frog-count').value);
+  state = [];
+  for (let i = 0; i < n; i++) state.push('G');
+  state.push(null); // empty center
+  for (let i = 0; i < n; i++) state.push('B');
+  moves = 0;
+  selected = null;
+  history = [];
+  solving = false;
+  document.getElementById('move-count').textContent = '0';
+  document.getElementById('status-msg').textContent = '';
+  updateBestDisplay();
+  render();
+}
+
+function updateBestDisplay() {
+  const k = 'n' + n;
+  document.getElementById('best-display').textContent = bestScores[k] !== undefined ? bestScores[k] : '--';
+}
+
+function getValidMoves(st, idx) {
+  const cell = st[idx];
+  if (!cell) return [];
+  const moves = [];
+  // Green moves right (+1 slide, +2 jump over brown)
+  // Brown moves left (-1 slide, -2 jump over green)
+  if (cell === 'G') {
+    if (idx + 1 < st.length && st[idx+1] === null) moves.push(idx+1);
+    if (idx + 2 < st.length && st[idx+1] === 'B' && st[idx+2] === null) moves.push(idx+2);
+  } else {
+    if (idx - 1 >= 0 && st[idx-1] === null) moves.push(idx-1);
+    if (idx - 2 >= 0 && st[idx-1] === 'G' && st[idx-2] === null) moves.push(idx-2);
+  }
+  return moves;
+}
+
+function isSolved(st) {
+  for (let i = 0; i < n; i++) if (st[i] !== 'B') return false;
+  if (st[n] !== null) return false;
+  for (let i = n+1; i < st.length; i++) if (st[i] !== 'G') return false;
+  return true;
+}
+
+function applyMove(st, from, to) {
+  const newSt = st.slice();
+  newSt[to] = newSt[from];
+  newSt[from] = null;
+  return newSt;
+}
+
+function render() {
+  const board = document.getElementById('board');
+  board.innerHTML = '';
+
+  for (let i = 0; i < state.length; i++) {
+    if (i > 0) {
+      const conn = document.createElement('div');
+      conn.className = 'connector';
+      conn.style.background = '#374151';
+      board.appendChild(conn);
+    }
+
+    const cell = document.createElement('div');
+    cell.className = 'frog-cell';
+    cell.setAttribute('tabindex', '0');
+    cell.setAttribute('aria-label', state[i] ? (state[i] === 'G' ? 'Green frog' : 'Brown frog') + ' at position ' + i : 'Empty space ' + i);
+
+    if (state[i] === 'G') {
+      cell.textContent = '🐸';
+      cell.style.background = '#065f46';
+    } else if (state[i] === 'B') {
+      cell.textContent = '🦎';
+      cell.style.background = '#78350f';
+    } else {
+      cell.textContent = '';
+      cell.style.background = '#1f2937';
+    }
+
+    if (selected === i) cell.classList.add('selected');
+
+    // Highlight valid targets
+    if (selected !== null && state[i] === null) {
+      const validTargets = getValidMoves(state, selected);
+      if (validTargets.includes(i)) cell.classList.add('valid-target');
+    }
+
+    const idx = i;
+    cell.addEventListener('click', () => handleClick(idx));
+    cell.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(idx); }
+    });
+
+    board.appendChild(cell);
+  }
+}
+
+function handleClick(idx) {
+  if (solving) return;
+
+  if (selected === null) {
+    if (state[idx]) { selected = idx; render(); }
+  } else if (selected === idx) {
+    selected = null; render();
+  } else {
+    const validTargets = getValidMoves(state, selected);
+    if (validTargets.includes(idx)) {
+      history.push(state.slice());
+      state = applyMove(state, selected, idx);
+      moves++;
+      document.getElementById('move-count').textContent = moves;
+      selected = null;
+      render();
+      checkWin();
+    } else if (state[idx]) {
+      selected = idx; render();
+    } else {
+      selected = null; render();
+    }
+  }
+}
+
+function checkWin() {
+  if (isSolved(state)) {
+    const k = 'n' + n;
+    if (bestScores[k] === undefined || moves < bestScores[k]) {
+      bestScores[k] = moves;
+      try { localStorage.setItem('frog-best', JSON.stringify(bestScores)); } catch(e){}
+    }
+    updateBestDisplay();
+    document.getElementById('status-msg').textContent = '🎉 Solved in ' + moves + ' moves!';
+    document.getElementById('status-msg').className = 'text-center text-sm font-bold text-green-400 mb-4 h-5';
+  }
+}
+
+function undoMove() {
+  if (solving || history.length === 0) return;
+  state = history.pop();
+  moves = Math.max(0, moves - 1);
+  selected = null;
+  document.getElementById('move-count').textContent = moves;
+  document.getElementById('status-msg').textContent = '';
+  document.getElementById('status-msg').className = 'text-center text-sm text-gray-400 mb-4 h-5';
+  render();
+}
+
+// BFS solver
+function solvePuzzle(initial) {
+  const visited = new Set();
+  const queue = [[initial, []]];
+  const key = st => st.join('');
+
+  while (queue.length > 0) {
+    const [st, path] = queue.shift();
+    const k = key(st);
+    if (visited.has(k)) continue;
+    visited.add(k);
+
+    if (isSolved(st)) return path;
+
+    for (let i = 0; i < st.length; i++) {
+      if (!st[i]) continue;
+      const targets = getValidMoves(st, i);
+      for (const t of targets) {
+        const next = applyMove(st, i, t);
+        if (!visited.has(key(next))) {
+          queue.push([next, path.concat([[i,t]])]);
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function autoSolve() {
+  if (solving) return;
+  solving = true;
+  selected = null;
+  document.getElementById('status-msg').textContent = '🤖 Solving...';
+
+  const initialState = [];
+  for (let i = 0; i < n; i++) initialState.push('G');
+  initialState.push(null);
+  for (let i = 0; i < n; i++) initialState.push('B');
+
+  const solution = solvePuzzle(initialState);
+  if (!solution) { solving = false; return; }
+
+  state = initialState.slice();
+  moves = 0;
+  history = [];
+  document.getElementById('move-count').textContent = '0';
+  document.getElementById('status-msg').textContent = '🤖 Watch the solution...';
+  render();
+
+  let step = 0;
+  function doStep() {
+    if (step >= solution.length) {
+      solving = false;
+      checkWin();
+      return;
+    }
+    const [from, to] = solution[step];
+    state = applyMove(state, from, to);
+    moves++;
+    document.getElementById('move-count').textContent = moves;
+    step++;
+    render();
+    setTimeout(doStep, 450);
+  }
+  setTimeout(doStep, 400);
+}
+
+// Load best scores
+try {
+  const saved = localStorage.getItem('frog-best');
+  if (saved) bestScores = JSON.parse(saved);
+} catch(e) {}
+
+initGame();
+</script>
+</body>
+</html>
